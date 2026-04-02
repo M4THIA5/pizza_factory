@@ -7,7 +7,7 @@ use crate::server::GossipState;
 
 // REPL = Read-Eval-Print Loop
 pub fn run_repl(state: std::sync::Arc<GossipState>) {
-    println!("\nCommandes : peers | quit\n");
+    println!("\nCommandes : peers | recipes | capabilities | quit\n");
     let stdin = std::io::stdin();
     let mut line = String::new();
 
@@ -27,9 +27,28 @@ pub fn run_repl(state: std::sync::Arc<GossipState>) {
                     }
                 }
             }
+            "recipes" => {
+                if state.recipes.is_empty() {
+                    println!("Aucune recette chargée.");
+                } else {
+                    for name in state.recipes.keys() {
+                        println!("  - {name}");
+                    }
+                }
+            }
+            "capabilities" => {
+                if state.capabilities.is_empty() {
+                    println!("Aucune capacité déclarée.");
+                } else {
+                    for cap in &state.capabilities {
+                        println!("  - {cap}");
+                    }
+                }
+            }
             "quit" | "exit" => std::process::exit(0),
-            _ => println!("Commandes : peers | quit"),
+            _ => println!("Commandes : peers | recipes | capabilities | quit"),
         }
+        println!("\nCommandes : peers | recipes | capabilities | quit\n");
     }
 }
 

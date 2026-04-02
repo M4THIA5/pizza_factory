@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::protocol::{GossipPayload, Version};
+use crate::recipe::{Recipe, load_recipes};
 
 pub mod udp;
 pub mod tcp;
@@ -21,10 +22,14 @@ pub struct GossipState {
     pub peers: Mutex<HashMap<String, Version>>,
     /// Version locale du nœud (incrémentée à chaque Ping émis)
     pub version: Mutex<Version>,
+    /// Recettes disponibles sur ce nœud
+    pub recipes: HashMap<String, Recipe>,
+    /// Capabilités de ce nœud (noms d'actions supportées)
+    pub capabilities: Vec<String>,
 }
 
 impl GossipState {
-    pub fn new(own_addr: String, generation: u64) -> Arc<Self> {
+    pub fn new(own_addr: String, generation: u64, recipes: HashMap<String, Recipe>, capabilities: Vec<String>) -> Arc<Self> {
         Arc::new(Self {
             own_addr,
             peers: Mutex::new(HashMap::new()),
@@ -32,6 +37,8 @@ impl GossipState {
                 counter: 0,
                 generation,
             }),
+            recipes,
+            capabilities,
         })
     }
 
@@ -62,18 +69,22 @@ impl GossipState {
     }
 }
 
-pub fn run_server(addr: String, initial_peers: Vec<String>) {
+pub fn run_server(addr: String, initial_peers: Vec<String>, capabilities: Vec<String>, recipes_path: String, gossip_interval: u64) {
     let generation = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
     println!("Agent démarré : {addr} (generation={generation})");
-    println!("Pairs initiaux : {:?}", initial_peers);
 
-    let state = GossipState::new(addr.clone(), generation);
+    let recipes = load_recipes(&recipes_path).unwrap_or_else(|e| {
+        eprintln!("Recettes non chargées : {e}");
+        HashMap::new()
+    });
+
+    let state = GossipState::new(addr.clone(), generation, recipes, capabilities);
     udp::start_udp_listener(state.clone());
-    udp::start_gossip_emitter(state.clone(), initial_peers, Duration::from_secs(3));
+    udp::start_gossip_emitter(state.clone(), initial_peers, Duration::from_secs(gossip_interval));
     tcp::start_tcp_server(state.clone());
     tcp::run_repl(state);
 }
