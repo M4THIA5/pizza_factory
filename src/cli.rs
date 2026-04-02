@@ -9,7 +9,7 @@ pub struct Args {
 #[derive(Subcommand)]
 pub enum Command {
     Server {
-        #[arg(short, long, default_value = "127.0.0.1:8001")]
+        #[arg(short, long, default_value = "127.0.0.1:8000")]
         addr: String,
         #[arg(short, long)]
         peer: Vec<String>,
