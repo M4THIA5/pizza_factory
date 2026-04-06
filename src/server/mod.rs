@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use ciborium::Value;
 
 use crate::protocol::{GossipPayload, Version};
 use crate::recipe::{Recipe, load_recipes};
@@ -17,9 +20,9 @@ fn now_ms() -> u64 {
 
 pub struct GossipState {
     /// Adresse de ce nœud
-    pub own_addr: String,
+    pub own_addr: SocketAddr,
     /// Pairs connus : adresse -> dernière version reçue
-    pub peers: Mutex<HashMap<String, Version>>,
+    pub peers: Mutex<HashMap<SocketAddr, Version>>,
     /// Version locale du nœud (incrémentée à chaque Ping émis)
     pub version: Mutex<Version>,
     /// Recettes disponibles sur ce nœud
@@ -29,7 +32,7 @@ pub struct GossipState {
 }
 
 impl GossipState {
-    pub fn new(own_addr: String, generation: u64, recipes: HashMap<String, Recipe>, capabilities: Vec<String>) -> Arc<Self> {
+    pub fn new(own_addr: SocketAddr, generation: u64, recipes: HashMap<String, Recipe>, capabilities: Vec<String>) -> Arc<Self> {
         Arc::new(Self {
             own_addr,
             peers: Mutex::new(HashMap::new()),
@@ -42,34 +45,65 @@ impl GossipState {
         })
     }
 
-    /// Incrémente le counter et retourne la version courante.
-    fn bump_version(&self) -> Version {
+    /// Incrémente le counter de la version.
+    fn bump_version(&self){
         let mut v = self.version.lock().unwrap();
         v.counter += 1;
-        v.clone()
     }
 
-    /// Construit un payload gossip avec la version courante.
-    fn make_payload(&self) -> GossipPayload {
-        GossipPayload {
-            last_seen: now_ms(),
-            version: self.bump_version(),
-        }
+    /// Construit le payload d'un Announce.
+    pub fn make_announce_payload(&self) -> GossipPayload {
+        let version = self.version.lock().unwrap().clone();
+
+        GossipPayload(Value::Map(vec![
+            (
+                Value::Text("Announce".to_string()),
+                Value::Map(vec![
+                    (Value::Text("node_addr".to_string()), Value::Tag(260, Box::new(Value::Text(self.own_addr.to_string())))),
+                    (Value::Text("capabilities".to_string()), Value::Array(self.capabilities.iter().cloned().map(Value::Text).collect())),
+                    (Value::Text("recipes".to_string()), Value::Array(self.recipes.keys().cloned().map(Value::Text).collect())),
+                    (Value::Text("peers".to_string()), Value::Array(self.peer_addrs().into_iter().map(|a| Value::Tag(260, Box::new(Value::Text(a.to_string())))).collect())),
+                    (Value::Text("version".to_string()), Value::Map(vec![
+                        (Value::Text("counter".to_string()), Value::Integer(version.counter.into())),
+                        (Value::Text("generation".to_string()), Value::Integer(version.generation.into())),
+                    ])),
+                ]),
+            )
+        ]))
+    }
+
+    /// Construit le payload d'un Ping ou Pong.
+    pub fn make_ping_pong_payload(&self) -> GossipPayload {
+        let version = self.version.lock().unwrap().clone();
+
+        GossipPayload(Value::Map(vec![
+            (Value::Text("last_seen".to_string()), Value::Integer(now_ms().into())),
+            (Value::Text("version".to_string()), Value::Map(vec![
+                (Value::Text("counter".to_string()), Value::Integer(version.counter.into())),
+                (Value::Text("generation".to_string()), Value::Integer(version.generation.into())),
+            ])),
+        ]))
     }
 
     /// Enregistre ou met à jour un pair.
-    fn update_peer(&self, addr: &str, version: Version) {
+    pub fn update_peer(&self, addr: SocketAddr, version: Version) {
         let mut peers = self.peers.lock().unwrap();
-        peers.insert(addr.to_string(), version);
+        let is_new = !peers.contains_key(&addr);
+        peers.insert(addr, version);
+        drop(peers);
+
+        if is_new {
+            self.bump_version();
+        }
     }
 
     /// Retourne la liste des adresses des pairs connus.
-    pub fn peer_addrs(&self) -> Vec<String> {
+    pub fn peer_addrs(&self) -> Vec<SocketAddr> {
         self.peers.lock().unwrap().keys().cloned().collect()
     }
 }
 
-pub fn run_server(addr: String, initial_peers: Vec<String>, capabilities: Vec<String>, recipes_path: String, gossip_interval: u64) {
+pub fn run_server(addr: SocketAddr, initial_peers: Vec<SocketAddr>, capabilities: Vec<String>, recipes_path: String, gossip_interval: u64) {
     let generation = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -82,9 +116,11 @@ pub fn run_server(addr: String, initial_peers: Vec<String>, capabilities: Vec<St
         HashMap::new()
     });
 
-    let state = GossipState::new(addr.clone(), generation, recipes, capabilities);
-    udp::start_udp_listener(state.clone());
-    udp::start_gossip_emitter(state.clone(), initial_peers, Duration::from_secs(gossip_interval));
+    let state = GossipState::new(addr, generation, recipes, capabilities);
+    let socket = udp::start_udp_listener(state.clone());
+
+    udp::start_gossip_emitter(state.clone(), initial_peers, Duration::from_secs(gossip_interval), socket);
+    
     tcp::start_tcp_server(state.clone());
     tcp::run_repl(state);
 }

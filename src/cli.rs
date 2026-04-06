@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -10,10 +12,10 @@ pub struct Args {
 pub enum Command {
     Server {
         #[arg(short, long, default_value = "127.0.0.1:8000")]
-        addr: String,
+        addr: SocketAddr,
 
         #[arg(short, long)]
-        peer: Vec<String>,
+        peer: Vec<SocketAddr>,
 
         #[arg(short, long)]
         capabilities: Vec<String>,

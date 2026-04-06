@@ -1,20 +1,20 @@
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use crate::{protocol::{GossipMessage, Version}, server::GossipState};
 
-/// Lance le thread d'écoute UDP : reçoit Ping → répond Pong, reçoit Pong → met à jour les pairs.
-pub fn start_udp_listener(state: Arc<GossipState>) {
+pub fn start_udp_listener(state: Arc<GossipState>) -> Arc<UdpSocket> {
     let addr = state.own_addr.clone();
-    thread::spawn(move || {
-        let socket = UdpSocket::bind(&addr).expect("UDP bind échoué");
-        println!("[UDP] En écoute sur {addr}");
+    let socket = Arc::new(UdpSocket::bind(&addr).expect("UDP bind échoué"));
+    println!("[UDP] En écoute sur {addr}");
 
+    let socket_listener = Arc::clone(&socket);
+    thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
-            let (len, src) = match socket.recv_from(&mut buf) {
+            let (len, src) = match socket_listener.recv_from(&mut buf) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("[UDP] recv_from : {e}");
@@ -26,44 +26,59 @@ pub fn start_udp_listener(state: Arc<GossipState>) {
 
             match GossipMessage::decode(&buf[..len]) {
                 Ok(GossipMessage::Ping(payload)) => {
-                    println!("[UDP] Ping de {src_str} (v{})", payload.version.counter);
-                    state.update_peer(&src_str, payload.version);
+                    let counter = payload.counter().unwrap_or(0);
+                    let version = payload.version().unwrap_or(Version { counter: 0, generation: 0 });
 
-                    // Répondre avec un Pong
-                    let pong = GossipMessage::Pong(state.make_payload()).encode();
-                    if let Err(e) = socket.send_to(&pong, src) {
-                        eprintln!("[UDP] Pong vers {src_str} : {e}");
-                    } else {
-                        println!("[UDP] Pong → {src_str}");
+                    println!("[UDP] Ping from {src_str} (v{})", counter);
+                    state.update_peer(src, version);
+
+                    // Répond avec un Pong
+                    let pong = GossipMessage::Pong(state.make_ping_pong_payload()).encode();
+                    if let Err(e) = socket_listener.send_to(&pong, src) {
+                        eprintln!("[UDP] Pong error to {src_str} : {e}");
                     }
                 }
                 Ok(GossipMessage::Pong(payload)) => {
-                    println!("[UDP] Pong de {src_str} (v{})", payload.version.counter);
-                    state.update_peer(&src_str, payload.version);
+                    let counter = payload.counter().unwrap_or(0);
+                    let version = payload.version().unwrap_or(Version { counter: 0, generation: 0 });
+
+                    println!("[UDP] Pong from {src_str} (v{})", counter);
+                    state.update_peer(src, version);
+                }
+                Ok(GossipMessage::Announce(payload)) => {
+                    let counter = payload.counter().unwrap_or(0);
+                    let version = payload.version().unwrap_or(Version { counter: 0, generation: 0 });
+
+                    println!("[UDP] Announce from {src_str} (v{})", counter);
+                    state.update_peer(src, version);
                 }
                 Err(e) => {
-                    eprintln!("[UDP] Decode échoué depuis {src_str} : {e}");
+                    eprintln!("[UDP] Decode failed from {src_str} : {e}");
                 }
             }
         }
     });
+
+    socket
 }
 
-/// Lance le thread gossip : envoie un Ping UDP à tous les pairs connus toutes les `interval`.
-pub fn start_gossip_emitter(state: Arc<GossipState>, initial_peers: Vec<String>, interval: Duration) {
-    thread::spawn(move || {
-        // Socket d'émission sur port aléatoire
-        let socket = UdpSocket::bind("127.0.0.1:0").expect("Gossip socket bind échoué");
+pub fn start_gossip_emitter(state: Arc<GossipState>, initial_peers: Vec<SocketAddr>, interval: Duration, socket: Arc<UdpSocket>) {
+    // Ajoute les pairs initiaux dans l'état
+    {
+        let mut peers = state.peers.lock().unwrap();
+        for p in &initial_peers {
+            peers.entry(*p).or_insert(Version {
+                counter: 0,
+                generation: 0,
+            });
+        }
+    }
 
-        // Ajoute les pairs initiaux dans l'état
-        {
-            let mut peers = state.peers.lock().unwrap();
-            for p in &initial_peers {
-                peers.entry(p.clone()).or_insert(Version {
-                    counter: 0,
-                    generation: 0,
-                });
-            }
+    thread::spawn(move || {
+        // Envoie une annonce initiale à tous les pairs connus
+        let announce = GossipMessage::Announce(state.make_announce_payload()).encode();
+        for peer_addr in &state.peer_addrs() {
+            socket.send_to(&announce, peer_addr).ok();
         }
 
         loop {
@@ -74,15 +89,15 @@ pub fn start_gossip_emitter(state: Arc<GossipState>, initial_peers: Vec<String>,
                 continue;
             }
 
-            let ping = GossipMessage::Ping(state.make_payload()).encode();
+            let ping = GossipMessage::Ping(state.make_ping_pong_payload()).encode();
 
             for peer_addr in &targets {
                 if *peer_addr == state.own_addr {
                     continue;
                 }
                 match socket.send_to(&ping, peer_addr) {
-                    Ok(_) => println!("[Gossip] Ping → {peer_addr}"),
-                    Err(e) => eprintln!("[Gossip] Ping vers {peer_addr} : {e}"),
+                    Ok(_) => println!("[Gossip] Ping to {peer_addr}"),
+                    Err(e) => eprintln!("[Gossip] Ping error to {peer_addr} : {e}"),
                 }
             }
         }
