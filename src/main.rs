@@ -2,7 +2,6 @@ mod cli;
 mod protocol;
 mod recipe;
 mod server;
-mod cbor;
 
 use cli::{Args, Command};
 use clap::Parser;

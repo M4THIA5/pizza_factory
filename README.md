@@ -40,6 +40,7 @@ cargo run -- server \
 cargo run -- server \
   --addr 127.0.0.1:8001 \
   --capabilities AddCheese,AddBasil \
+  --gossip_interval 5 \
   --peer 127.0.0.1:8000
 
 # Terminal 3 — Agent C (port 8002, connaît A)

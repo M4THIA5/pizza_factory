@@ -22,8 +22,9 @@ pub fn run_repl(state: std::sync::Arc<GossipState>) {
                 if peers.is_empty() {
                     println!("Aucun pair connu.");
                 } else {
-                    for (addr, version) in peers.iter() {
-                        println!("  {addr}  counter={} generation={}", version.counter, version.generation);
+                    for (addr, info) in peers.iter() {
+                        println!("  {addr}  counter={} generation={} caps={:?}",
+                            info.version.counter, info.version.generation, info.capabilities);
                     }
                 }
             }

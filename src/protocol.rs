@@ -35,11 +35,11 @@ impl GossipPayload {
         })
     }
 
-    fn extract_u64(map: &[(Value, Value)], key: &str) -> Option<u64> {
+    fn extract_u32(map: &[(Value, Value)], key: &str) -> Option<u32> {
         map.iter().find_map(|(k, v)| {
             if k == &Value::Text(key.into()) {
                 match v {
-                    Value::Integer(i) => u64::try_from(*i).ok(),
+                    Value::Integer(i) => u32::try_from(*i).ok(),
                     _ => None,
                 }
             } else {
@@ -48,20 +48,70 @@ impl GossipPayload {
         })
     }
 
-    pub fn counter(&self) -> Option<u64> {
-        let announce = self.get_announce_map()?;
-        let version = Self::get_version_map(announce)?;
-        Self::extract_u64(version, "counter")
-    }
-
     pub fn version(&self) -> Option<Version> {
         let announce = self.get_announce_map()?;
         let version_map = Self::get_version_map(announce)?;
         Some(Version {
-            counter: Self::extract_u64(version_map, "counter")?,
-            generation: Self::extract_u64(version_map, "generation")?,
+            counter: Self::extract_u32(version_map, "counter")?,
+            generation: Self::extract_u32(version_map, "generation")?,
         })
     }
+
+    /// Version dans le corps du message (Ping, Pong, ou map interne d'Announce).
+    pub fn body_version(&self) -> Option<Version> {
+        let root = match &self.0 {
+            Value::Map(m) if !m.is_empty() => m,
+            _ => return None,
+        };
+        let (_, body) = root.first()?;
+        let body_map = match body {
+            Value::Map(m) => m.as_slice(),
+            _ => return None,
+        };
+        let version_map = Self::get_version_map(body_map)?;
+        Some(Version {
+            counter: Self::extract_u32(version_map, "counter")?,
+            generation: Self::extract_u32(version_map, "generation")?,
+        })
+    }
+
+    pub fn capabilities(&self) -> Option<Vec<String>> {
+        let announce = self.get_announce_map()?;
+        let caps = announce.iter().find_map(|(k, v)| {
+            if k == &Value::Text("capabilities".into()) {
+                match v {
+                    Value::Array(items) => Some(items),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })?;
+
+        caps.iter().map(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        }).collect()
+    }
+
+    pub fn recipes(&self) -> Option<Vec<String>> {
+        let announce = self.get_announce_map()?;
+        let recs = announce.iter().find_map(|(k, v)| {
+            if k == &Value::Text("recipes".into()) {
+                match v {
+                    Value::Array(items) => Some(items),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })?;
+
+        recs.iter().map(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        }).collect()
+}
 }
 
 /// Version d'un nœud dans le réseau gossip.
@@ -69,8 +119,14 @@ impl GossipPayload {
 /// generation : timestamp de démarrage (pour distinguer les redémarrages)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Version {
-    pub counter: u64,
-    pub generation: u64,
+    pub counter: u32,
+    pub generation: u32,
+}
+
+pub struct PeerInfo {
+    pub version: Version,
+    pub capabilities: Vec<String>,
+    pub recipes: Vec<String>,
 }
 
 /// Messages UDP du protocole gossip.
