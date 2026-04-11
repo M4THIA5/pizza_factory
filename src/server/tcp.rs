@@ -291,8 +291,11 @@ pub fn run_repl(state: std::sync::Arc<GossipState>) {
                 } else {
                     for (addr, info) in peers.iter() {
                         println!(
-                            "  {addr}  counter={} generation={} caps={:?}",
-                            info.version.counter, info.version.generation, info.capabilities
+                            "  {addr}  counter={} generation={} caps={:?} recipes={:?}",
+                            info.version.counter,
+                            info.version.generation,
+                            info.capabilities,
+                            info.recipes
                         );
                     }
                 }
@@ -323,9 +326,9 @@ pub fn run_repl(state: std::sync::Arc<GossipState>) {
 }
 
 pub fn start_tcp_server(state: Arc<GossipState>) {
-    let addr = state.own_addr.clone();
+    let addr = state.own_addr;
     thread::spawn(move || {
-        let listener = TcpListener::bind(&addr).expect("TCP bind échoué");
+        let listener = TcpListener::bind(addr).expect("TCP bind échoué");
         println!("[TCP] Serveur en écoute sur {addr} (CBOR)");
 
         for stream in listener.incoming() {

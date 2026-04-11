@@ -8,8 +8,8 @@ use crate::server::now_ms;
 use crate::{protocol::{GossipMessage, Version}, server::GossipState};
 
 pub fn start_udp_listener(state: Arc<GossipState>) -> Arc<UdpSocket> {
-    let addr = state.own_addr.clone();
-    let socket = Arc::new(UdpSocket::bind(&addr).expect("UDP bind échoué"));
+    let addr = state.own_addr;
+    let socket = Arc::new(UdpSocket::bind(addr).expect("UDP bind échoué"));
     println!("[UDP] En écoute sur {addr}");
 
     let socket_listener = Arc::clone(&socket);
