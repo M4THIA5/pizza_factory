@@ -1,25 +1,10 @@
-# 🍕 Pizza Agent
+# 🍕 Pizza Factory
 
-Système distribué de production de pizzas en Rust. Chaque agent connaît un sous-ensemble de capacités et collabore avec les autres via un protocole de découverte UDP (gossip) et des échanges TCP.
-
-## Architecture
-
-```text
-src/
-├── main.rs           # Point d'entrée, dispatch des sous-commandes
-├── cli.rs            # Arguments CLI (clap)
-├── protocol.rs       # Types partagés : GossipMessage, Version, GossipPayload
-├── recipe.rs         # Parser de recettes (DSL)
-└── server/
-    ├── mod.rs        # Commun à TCP et UDP : GossipState, run_server()
-    ├── udp.rs        # Gossip : start_udp_listener(), start_gossip_emitter()
-    └── tcp.rs        # Production : start_tcp_server(), handle_tcp_connection()
-└── client/
-```
+Système distribué de « production de pizzas » en Rust : chaque nœud expose des **capacités** (actions), découvre les autres via **gossip UDP** (CBOR), et sert des **commandes TCP** (CBOR encadré) compatibles avec le protocole attendu par `pizza_factory`.
 
 ## Prérequis
 
-- Rust 2021 (cargo 1.70+)
+- Rust avec édition **2024** (toolchain récente, `cargo` à jour)
 
 ## Compilation
 
@@ -27,67 +12,121 @@ src/
 cargo build
 ```
 
-## Lancer 3 serveurs
-
-Chaque serveur tourne sur un port différent. Le premier n'a pas de pair connu — les autres lui passent son adresse au démarrage. La découverte se propage ensuite automatiquement via le gossip UDP.
+Contrôle strict des avertissements :
 
 ```bash
-# Terminal 1 — Agent A (port 8000, pas de pair connu)
-cargo run -- server \
-  --capabilities MakeDough,Bake
+cargo clippy -- -D warnings
+```
 
-# Terminal 2 — Agent B (port 8001, connaît A)
+## Arborescence
+
+```text
+src/
+├── main.rs           # Point d’entrée : `server` | `client`
+├── cli.rs            # Arguments (clap)
+├── protocol.rs       # Messages UDP gossip : GossipMessage, GossipPayload, Version
+├── recipe.rs         # Chargement et parsing des recettes (DSL)
+├── wire/             # Trames TCP communes : longueur u32 BE + CBOR
+│   ├── mod.rs
+│   └── framing.rs
+├── client/           # Client TCP (order, list-recipes, get-recipe)
+│   └── mod.rs
+└── server/
+    ├── mod.rs        # GossipState, run_server()
+    ├── udp.rs        # Écoute + émission gossip (Ping / Pong / Announce)
+    └── tcp.rs        # Serveur TCP CBOR + REPL
+```
+
+## Serveur
+
+### Rôle
+
+- **UDP** : annonces d’état (`Announce`), échanges `Ping` / `Pong` pour maintenir la vue des pairs (capacités, recettes annoncées, version).
+- **TCP** : même adresse `host:port` ; protocole par **trames** : 4 octets (longueur big-endian du corps) + corps **CBOR**.
+- **REPL** (stdin) : commandes `peers`, `recipes`, `capabilities`, `quit`.
+
+### Exemple — trois nœuds
+
+Chaque instance écoute sur un port différent. Les `--peer` amorcent la table ; le gossip propage la topologie.
+
+```bash
+# Terminal 1 — nœud A (8000)
+cargo run -- server --addr 127.0.0.1:8000 --capabilities MakeDough,Bake
+
+# Terminal 2 — nœud B (8001), pair A
 cargo run -- server \
   --addr 127.0.0.1:8001 \
   --capabilities AddCheese,AddBasil \
-  --gossip_interval 5 \
+  --gossip-interval 5 \
   --peer 127.0.0.1:8000
 
-# Terminal 3 — Agent C (port 8002, connaît A)
+# Terminal 3 — nœud C (8002), pair A
 cargo run -- server \
   --addr 127.0.0.1:8002 \
   --capabilities AddOliveOil,AddPepperoni \
   --recipes assets/pizza.recipes \
-  --peer 127.0.0.1:8001
+  --peer 127.0.0.1:8000
 ```
 
-Au bout de 10 secondes (premier cycle gossip), tous les agents se connaissent mutuellement.
+### Options principales
 
-## Commandes interactives (REPL)
+| Option | Description |
+| --- | --- |
+| `--addr` | Adresse d’écoute UDP + TCP (défaut : `127.0.0.1:8000`) |
+| `--peer` | Pair bootstrap, répétable |
+| `--capabilities` | Liste d’actions supportées (répétable ou une fois avec des virgules selon le shell) |
+| `--recipes` | Fichier de recettes (défaut : `assets/pizza.recipes`) |
+| `--gossip-interval` | Intervalle en secondes entre les cycles de gossip (défaut : `10`) |
 
-Une fois un serveur lancé, un REPL est disponible dans le terminal :
+Aide : `cargo run -- server --help`
 
-```text
-peers         — liste les pairs connus et leur version
-recipes       — affiche les recettes chargées
-capabilities  — affiche les capacités de cet agent
-quit          — arrête le serveur
+### REPL
+
+| Commande | Effet |
+| --- | --- |
+| `peers` | Pairs connus : version, capacités, recettes vues dans les annonces |
+| `recipes` | Recettes chargées localement depuis le fichier |
+| `capabilities` | Capacités déclarées par ce nœud |
+| `quit` / `exit` | Quitte le processus |
+
+## Client
+
+Même encodage TCP que `pizza_factory client` (trames longueur + CBOR).
+
+```bash
+# Passer une commande (recette) sur un nœud
+cargo run -- client --peer 127.0.0.1:8000 order Minimal
+
+# Lister les recettes exposées par le serveur
+cargo run -- client --peer 127.0.0.1:8000 list-recipes
+
+# Obtenir le détail d’une recette
+cargo run -- client --peer 127.0.0.1:8000 get-recipe Margherita
 ```
 
-## Protocole
+Aide : `cargo run -- client --help`
 
-### UDP — Gossip (découverte)
+## Protocoles
 
-Chaque agent envoie un `Ping` UDP à tous ses pairs connus toutes les **10 secondes**. À la réception d'un `Ping`, l'agent enregistre l'expéditeur et répond avec un `Pong`.
+### UDP — Gossip
 
-Les messages sont sérialisés en **CBOR** sous la forme d'un tableau à 2 éléments :
+Messages **CBOR** en map à une clé typée, par exemple :
 
-```text
-["Ping", { last_seen: u64, version: { counter: u64, generation: u64 } }]
-["Pong", { last_seen: u64, version: { counter: u64, generation: u64 } }]
-```
+- `Ping` / `Pong` : charge utile avec `version` (`counter`, `generation`) et métadonnées (`last_seen`, etc.).
+- `Announce` : `node_addr`, `capabilities`, `recipes`, `peers`, `version`.
 
-- `last_seen` : timestamp en millisecondes
-- `counter` : incrémenté à chaque message émis
-- `generation` : timestamp de démarrage du nœud (permet de détecter un redémarrage)
+À la réception d’un `Announce` décrivant un **nouveau** pair, le nœud peut incrémenter sa version et **rediffuser** un `Announce` pour rester cohérent avec les réponses `Pong`.
 
-### TCP — Production
+### TCP — Commandes
 
-Les commandes de production (à venir) transitent en TCP pour garantir la fiabilité de la transmission.
+1. Le client envoie une trame : longueur `u32` big-endian, puis une map CBOR dont la première clé indique la commande : `order`, `list_recipes`, `get_recipe`.
+2. Pour `order`, le serveur répond notamment par `order_receipt` (identifiant de commande, tag CBOR **37**), puis `completed_order` dont le champ `result` peut contenir une chaîne JSON décrivant contenu et mises à jour (actions locales, éventuel `Forward` vers un autre pair tag **260**, `Deliver`, etc.).
+
+Les journaux préfixés `[TCP]` sur le serveur détaillent les actions locales et les transferts vers un pair lorsque la capacité n’est pas disponible sur le nœud courant.
 
 ## Format des recettes
 
-Les recettes sont décrites dans un fichier texte avec la syntaxe suivante :
+Fichier texte, blocs séparés par une ligne vide :
 
 ```text
 Margherita =
@@ -98,20 +137,7 @@ Margherita =
     -> AddOliveOil
 ```
 
-- `->` : séquence d'étapes
-- `[A, B]` : étapes parallèles (ordre libre)
-- `Action(param=value)` : action avec paramètres
-- `Action^n` : répétition d'une action n fois
-
-## Arguments disponibles
-
-```text
-Usage: pizza-agent server [OPTIONS]
-
-Options:
-  -a, --addr <ADDR>              Adresse d'écoute [défaut: 127.0.0.1:8001]
-  -p, --peer <PEER>              Pair connu au démarrage (répétable)
-  -c, --capabilities <CAP>       Capacités de cet agent (séparées par virgule)
-  -r, --recipes <PATH>           Fichier de recettes [défaut: assets/pizza.recipes]
-  -h, --help                     Affiche l'aide
-```
+- `->` : enchaînement d’étapes.
+- `[A, B]` : étapes en parallèle.
+- `Action(p=v,…)` : paramètres nommés.
+- `Action^n` : répétition (syntaxe du parser).
