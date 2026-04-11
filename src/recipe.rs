@@ -92,3 +92,69 @@ pub fn load_recipes(path: &str) -> Result<HashMap<String, Recipe>, String> {
         })
         .collect()
 }
+
+fn format_action(a: &Action) -> String {
+    let base = if a.params.is_empty() {
+        a.name.clone()
+    } else {
+        let inner = a
+            .params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}({inner})", a.name)
+    };
+    if a.repeat > 1 {
+        format!("{base}^{}", a.repeat)
+    } else {
+        base
+    }
+}
+
+fn format_step(step: &Step) -> String {
+    match step {
+        Step::Single(a) => format_action(a),
+        Step::Parallel(actions) => {
+            let inner = actions.iter().map(format_action).collect::<Vec<_>>().join(", ");
+            format!("[{inner}]")
+        }
+    }
+}
+
+/// Représentation texte du fichier recette (pour `get_recipe`).
+pub fn recipe_to_formula(r: &Recipe) -> String {
+    let mut s = format!("{} =\n", r.name);
+    for (i, step) in r.steps.iter().enumerate() {
+        if i > 0 {
+            s.push_str("    -> ");
+        } else {
+            s.push_str("    ");
+        }
+        s.push_str(&format_step(step));
+        s.push('\n');
+    }
+    s
+}
+
+/// Actions dans l’ordre d’exécution (répétitions incluses).
+pub fn flatten_actions(r: &Recipe) -> Vec<Action> {
+    let mut out = Vec::new();
+    for step in &r.steps {
+        match step {
+            Step::Single(a) => {
+                for _ in 0..a.repeat {
+                    out.push(a.clone());
+                }
+            }
+            Step::Parallel(v) => {
+                for a in v {
+                    for _ in 0..a.repeat {
+                        out.push(a.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}

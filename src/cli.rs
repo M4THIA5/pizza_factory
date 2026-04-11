@@ -27,7 +27,24 @@ pub enum Command {
         gossip_interval: u64,
     },
     Client {
-        #[arg(short, long)]
-        pizza: String,
+        #[arg(long)]
+        peer: SocketAddr,
+        #[command(subcommand)]
+        client: ClientCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ClientCommand {
+    /// Commande une recette sur le pair (équivalent à `pizza_factory client … order …`)
+    Order {
+        /// Nom de la recette (ex. `Minimal`)
+        recipe: String,
+    },
+    #[command(name = "list-recipes")]
+    ListRecipes,
+    #[command(name = "get-recipe")]
+    GetRecipe {
+        recipe: String,
     },
 }

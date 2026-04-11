@@ -142,6 +142,10 @@ impl GossipState {
             .find(|(_, info)| info.capabilities.iter().any(|c| c == action))
             .map(|(addr, _)| *addr)
     }
+
+    pub fn has_capability(&self, action: &str) -> bool {
+        self.capabilities.iter().any(|c| c == action)
+    }
 }
 
 pub fn run_server(addr: SocketAddr, initial_peers: Vec<SocketAddr>, capabilities: Vec<String>, recipes_path: String, gossip_interval: u64) {
